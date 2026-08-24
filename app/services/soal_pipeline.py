@@ -43,6 +43,60 @@ def konsep_kandidat(session: Session, bab_id: str) -> list[str]:
     return session.execute_read(_tx)
 
 
+def konsep_kandidat_detail(session: Session, bab_id: str) -> list[dict]:
+    """Sama seperti `konsep_kandidat` (leaf-only: SubBab kalau ada, kalau tidak Bab langsung), tapi
+    balikin `{"nama": ..., "deskripsi": ...}` per konsep -- dipakai generator soal LLM biar punya
+    konteks definisi konsep, bukan cuma nama doang."""
+
+    def _tx(tx):
+        result = tx.run(
+            """
+            MATCH (b:Bab {id: $bab_id})
+            OPTIONAL MATCH (b)-[:HAS_SUBBAB]->(sub:SubBab)
+            OPTIONAL MATCH (b)-[:HAS_KONSEP]->(kb:Konsep)
+            OPTIONAL MATCH (sub)-[:HAS_KONSEP]->(ks:Konsep)
+            RETURN collect(DISTINCT {nama: kb.nama, deskripsi: kb.deskripsi}) AS konsep_bab,
+                   collect(DISTINCT {nama: ks.nama, deskripsi: ks.deskripsi}) AS konsep_sub
+            """,
+            bab_id=bab_id,
+        )
+        record = result.single()
+        if record is None:
+            return []
+        konsep_sub = [k for k in record["konsep_sub"] if k["nama"] is not None]
+        konsep_bab = [k for k in record["konsep_bab"] if k["nama"] is not None]
+        dipakai = konsep_sub if konsep_sub else konsep_bab
+        return sorted(dipakai, key=lambda k: k["nama"])
+
+    return session.execute_read(_tx)
+
+
+def get_bab_info(session: Session, bab_id: str) -> Optional[dict]:
+    """Ringkasan Bab (nomor, nama, summary Bab + SubBab-nya kalau ada) -- konteks buat prompt
+    generator soal LLM."""
+
+    def _tx(tx):
+        result = tx.run(
+            """
+            MATCH (b:Bab {id: $bab_id})
+            OPTIONAL MATCH (b)-[:HAS_SUBBAB]->(sub:SubBab)
+            RETURN b.nomor AS nomor, b.nama AS nama, b.summary AS summary,
+                   collect(DISTINCT sub.summary) AS subbab_summary
+            """,
+            bab_id=bab_id,
+        )
+        record = result.single()
+        if record is None or record["nama"] is None:
+            return None
+        subbab_summary = [s for s in record["subbab_summary"] if s]
+        return {
+            "nomor": record["nomor"], "nama": record["nama"],
+            "summary": record["summary"] or "", "subbab_summary": subbab_summary,
+        }
+
+    return session.execute_read(_tx)
+
+
 _PROMPT_SARAN_KONSEP = """Kamu adalah asisten yang membantu dosen menandai konsep apa saja yang diuji oleh
 sebuah soal ujian matematika.
 

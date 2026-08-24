@@ -93,7 +93,11 @@ def confirm_extraction(body: PdfConfirmRequest):
     """Simpan hasil ekstraksi (job `pdf_extraction` yang statusnya `done`) ke Knowledge Graph,
     dengan daftar konsep per unit sesuai editan dosen (boleh hapus/tambah dari hasil LLM)."""
 
-    result = confirm_pdf_extraction(body.job_id, {item.unit_id: item.konsep for item in body.unit})
+    overrides = {
+        item.unit_id: [{"nama": k.nama, "deskripsi": k.deskripsi} for k in item.konsep]
+        for item in body.unit
+    }
+    result = confirm_pdf_extraction(body.job_id, overrides)
     if result is None:
         raise HTTPException(status_code=404, detail="Draft ekstraksi tidak ditemukan (job_id salah atau sudah dikonfirmasi/dibuang)")
     return result

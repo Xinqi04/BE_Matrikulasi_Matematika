@@ -9,6 +9,14 @@ class Settings(BaseSettings):
     gemini_api_key: str
     gemini_model: str = "gemini-3.1-flash-lite-preview"
 
+    # Engine rekonstruksi-KG (parsing struktur PDF + ekstraksi konsep) -- lihat
+    # app/services/rekonstruksi_kg/.
+    gemini_structure_model: str = "gemini-3.5-flash-lite"
+    gemini_extraction_model: str = "gemini-3.1-flash-lite"
+    llm_request_delay_seconds: int = 5
+    llm_max_retries: int = 3
+    max_unit_tokens: int = 30000
+
     youtube_api_key: str
 
     neo4j_uri: str = "bolt://localhost:7687"
@@ -18,9 +26,6 @@ class Settings(BaseSettings):
 
     default_modul_id: str = "modul_matrikulasi_matematika_dasar"
     default_nama_domain: str = "Matematika Dasar"
-
-    max_chars_per_chunk: int = 5100
-    maks_konsep_per_chunk: int = 5
 
     upload_dir: str = "uploads"
 

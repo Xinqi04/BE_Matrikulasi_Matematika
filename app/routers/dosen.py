@@ -1,9 +1,10 @@
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 
 from app.auth import hash_password, require_role
 from app.config import Settings, get_settings
+from app.job_manager import create_job, run_job
 from app.neo4j_client import neo4j_session
 from app.schemas import (
     BeriNilaiBatchRequest,
@@ -11,8 +12,11 @@ from app.schemas import (
     BuatDosenRequest,
     BuatMahasiswaRequest,
     BuatSoalRequest,
+    ConfirmSoalDraftRequest,
     DosenDashboardOut,
+    GenerateSoalRequest,
     JawabanOut,
+    JobAccepted,
     ModulMahasiswaOut,
     SetAktifRequest,
     SetModulMahasiswaRequest,
@@ -24,6 +28,7 @@ from app.schemas import (
     UserOut,
 )
 from app.services import enrollment_repo, jawaban_repo, kg_queries, soal_pipeline, user_repo
+from app.services.soal_generator import generate_soal_draft
 
 router = APIRouter(prefix="/dosen", tags=["dosen"], dependencies=[Depends(require_role("dosen"))])
 
@@ -110,6 +115,44 @@ def buat_soal(body: BuatSoalRequest, user: dict = Depends(require_role("dosen"))
             jawaban_referensi=body.jawaban_referensi, tingkat_kesulitan=body.tingkat_kesulitan,
         )
     return soal
+
+
+@router.post("/soal/generate", response_model=JobAccepted, status_code=202)
+def generate_soal(
+    body: GenerateSoalRequest, background_tasks: BackgroundTasks, settings: Settings = Depends(get_settings),
+):
+    """Mulai generate draf soal (via LLM) di background -- BELUM ditulis ke Knowledge Graph. Hasilnya
+    ada di `job.result.items` (poll lewat `GET /jobs/{job_id}`) buat direview/diedit dosen, baru
+    disimpan lewat `POST /soal/generate/confirm`."""
+
+    job = create_job("soal_generation")
+
+    def _task():
+        run_job(
+            job.id,
+            lambda log_fn: generate_soal_draft(
+                body.bab_id, body.jumlah, body.tipe, body.tingkat_kesulitan, settings, log_fn,
+            ),
+        )
+
+    background_tasks.add_task(_task)
+    return JobAccepted(job_id=job.id, status=job.status)
+
+
+@router.post("/soal/generate/confirm", response_model=list[SoalOut], status_code=201)
+def confirm_generated_soal(body: ConfirmSoalDraftRequest, user: dict = Depends(require_role("dosen"))):
+    """Simpan draf soal (yang sudah ditinjau/diedit dosen di frontend) ke Knowledge Graph, lewat
+    `soal_pipeline.buat_soal()` yang sama dengan endpoint insert manual."""
+
+    with neo4j_session() as session:
+        return [
+            soal_pipeline.buat_soal(
+                session, bab_id=body.bab_id, teks_soal=item.teks_soal, tipe=item.tipe,
+                konsep_list=item.konsep, dibuat_oleh=user["id"],
+                jawaban_referensi=item.jawaban_referensi, tingkat_kesulitan=item.tingkat_kesulitan,
+            )
+            for item in body.items
+        ]
 
 
 @router.get("/soal", response_model=list[SoalOut])

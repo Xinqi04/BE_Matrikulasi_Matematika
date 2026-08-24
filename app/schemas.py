@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.job_manager import JobStatus
 
@@ -29,17 +29,22 @@ class YoutubeClassifyRequest(BaseModel):
 
 # --- PDF extraction preview/confirm ---
 
+class KonsepDraft(BaseModel):
+    nama: str
+    deskripsi: str = ""
+
+
 class PdfPreviewUnit(BaseModel):
     unit_id: str
     level: str
     label: str
     judul: str
-    konsep: list[str]
+    konsep: list[KonsepDraft]
 
 
 class PdfConfirmUnitInput(BaseModel):
     unit_id: str
-    konsep: list[str]
+    konsep: list[KonsepDraft]
 
 
 class PdfConfirmRequest(BaseModel):
@@ -233,6 +238,26 @@ class SoalOut(BaseModel):
     tingkat_kesulitan: Optional[str] = None
     dibuat_oleh: Optional[str] = None
     dibuat_pada: Optional[str] = None
+
+
+class GenerateSoalRequest(BaseModel):
+    bab_id: str
+    jumlah: int = Field(ge=1, le=20)
+    tipe: Optional[str] = None  # None = campuran isian_singkat/esai
+    tingkat_kesulitan: Optional[str] = None  # None = campuran mudah/sedang/sulit
+
+
+class SoalDraftItem(BaseModel):
+    teks_soal: str
+    tipe: str
+    tingkat_kesulitan: str
+    konsep: list[str]
+    jawaban_referensi: Optional[str] = None
+
+
+class ConfirmSoalDraftRequest(BaseModel):
+    bab_id: str
+    items: list[SoalDraftItem]
 
 
 class SoalMahasiswaOut(BaseModel):
