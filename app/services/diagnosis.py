@@ -92,6 +92,18 @@ def _cari_bab_sebelumnya(session: Session, bab_id: str) -> Optional[dict]:
 def status_bab(session: Session, mahasiswa_id: str, bab_id: str) -> tuple[str, Optional[float]]:
     """Versi ringan `diagnosa_bab` buat dashboard/daftar Bab -- cuma butuh status + nilai, tanpa
     query rekomendasi video & konsep Bab berikutnya (mahal kalau dipanggil per-Bab di satu daftar)."""
+    def _ada_menunggu(tx):
+        return tx.run(
+            """
+            MATCH (:Bab {id:$bab_id})-[:HAS_SOAL]->(:Soal)<-[r:MENJAWAB {status:'menunggu_penilaian'}]-(:User {id:$user_id})
+            RETURN count(r) > 0 AS ada
+            """,
+            bab_id=bab_id, user_id=mahasiswa_id,
+        ).single()["ada"]
+
+    if session.execute_read(_ada_menunggu):
+        return "menunggu_penilaian", None
+
     nilai_bab = nilai_bab_mahasiswa(session, mahasiswa_id, bab_id)
     if nilai_bab is None:
         return "belum_ada_nilai", None

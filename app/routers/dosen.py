@@ -17,20 +17,72 @@ from app.schemas import (
     GenerateSoalRequest,
     JawabanOut,
     JobAccepted,
+    BabCreateRequest,
+    KonsepCreateRequest,
+    KonsepUpdateRequest,
     ModulMahasiswaOut,
     SetAktifRequest,
+    SetSoalUjianRequest,
     SetModulMahasiswaRequest,
     SoalOut,
+    StrukturNamaRequest,
     SuggestKonsepRequest,
     SuggestKonsepResponse,
     UpdateSoalRequest,
     UserCreatedResponse,
     UserOut,
 )
-from app.services import enrollment_repo, jawaban_repo, kg_queries, soal_pipeline, user_repo
+from app.services import enrollment_repo, jawaban_repo, kg_queries, soal_pipeline, struktur_repo, ujian_modul_repo, user_repo
 from app.services.soal_generator import generate_soal_draft
 
 router = APIRouter(prefix="/dosen", tags=["dosen"], dependencies=[Depends(require_role("dosen"))])
+
+
+# --- Struktur modul ---
+
+@router.put("/struktur/modul/{modul_id}", response_model=dict)
+def edit_modul(modul_id: str, body: StrukturNamaRequest):
+    with neo4j_session() as session:
+        hasil = struktur_repo.update_modul(session, modul_id, body.nama)
+    if hasil is None:
+        raise HTTPException(status_code=404, detail="Modul tidak ditemukan")
+    return hasil
+
+
+@router.post("/struktur/modul/{modul_id}/bab", response_model=dict, status_code=201)
+def tambah_bab(modul_id: str, body: BabCreateRequest):
+    with neo4j_session() as session:
+        hasil = struktur_repo.create_bab(session, modul_id, body.nama, body.nomor)
+    if hasil is None:
+        raise HTTPException(status_code=404, detail="Modul tidak ditemukan")
+    return hasil
+
+
+@router.put("/struktur/bab/{bab_id}", response_model=dict)
+def edit_bab(bab_id: str, body: StrukturNamaRequest):
+    with neo4j_session() as session:
+        hasil = struktur_repo.update_bab(session, bab_id, body.nama)
+    if hasil is None:
+        raise HTTPException(status_code=404, detail="Bab tidak ditemukan")
+    return hasil
+
+
+@router.post("/struktur/unit/{owner_id}/konsep", response_model=dict, status_code=201)
+def tambah_konsep(owner_id: str, body: KonsepCreateRequest):
+    with neo4j_session() as session:
+        hasil = struktur_repo.add_konsep(session, owner_id, body.nama, body.deskripsi)
+    if hasil is None:
+        raise HTTPException(status_code=404, detail="Bab atau sub-bab tidak ditemukan")
+    return hasil
+
+
+@router.put("/struktur/unit/{owner_id}/konsep", response_model=dict)
+def edit_konsep(owner_id: str, body: KonsepUpdateRequest):
+    with neo4j_session() as session:
+        hasil = struktur_repo.rename_konsep(session, owner_id, body.nama_lama, body.nama_baru)
+    if hasil is None:
+        raise HTTPException(status_code=404, detail="Konsep tidak ditemukan pada bab atau sub-bab ini")
+    return hasil
 
 
 # --- Manajemen mahasiswa & dosen ---
@@ -174,6 +226,15 @@ def update_soal(soal_id: str, body: UpdateSoalRequest):
     return soal
 
 
+@router.put("/soal/{soal_id}/ujian", response_model=SoalOut)
+def set_soal_ujian(soal_id: str, body: SetSoalUjianRequest):
+    with neo4j_session() as session:
+        soal = soal_pipeline.set_soal_ujian(session, soal_id, body.untuk_ujian)
+    if soal is None:
+        raise HTTPException(status_code=404, detail="Soal tidak ditemukan")
+    return soal
+
+
 @router.delete("/soal/{soal_id}")
 def hapus_soal(soal_id: str):
     with neo4j_session() as session:
@@ -205,6 +266,19 @@ def beri_nilai_batch(body: BeriNilaiBatchRequest):
     with neo4j_session() as session:
         hasil = jawaban_repo.beri_nilai_batch(session, [item.model_dump() for item in body.nilai])
     return {"detail": f"{len(hasil)} dari {len(body.nilai)} nilai tersimpan", "jawaban": hasil}
+
+
+@router.get("/penilaian-ujian-modul", response_model=list[dict])
+def get_penilaian_ujian_modul(status: Optional[str] = None):
+    with neo4j_session() as session:
+        return ujian_modul_repo.list_jawaban_untuk_dosen(session, status)
+
+
+@router.post("/penilaian-ujian-modul/batch", response_model=dict)
+def beri_nilai_ujian_modul_batch(body: BeriNilaiBatchRequest):
+    with neo4j_session() as session:
+        hasil = ujian_modul_repo.beri_nilai_batch(session, [item.model_dump() for item in body.nilai])
+    return {"detail": f"{len(hasil)} nilai ujian modul tersimpan", "jawaban": hasil}
 
 
 # --- Dashboard ---

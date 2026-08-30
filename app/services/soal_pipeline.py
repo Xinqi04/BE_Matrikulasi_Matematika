@@ -167,7 +167,7 @@ def buat_soal(
             CREATE (s:Soal {
                 id: $soal_id, teks_soal: $teks_soal, tipe: $tipe,
                 jawaban_referensi: $jawaban_referensi, tingkat_kesulitan: $tingkat_kesulitan,
-                dibuat_oleh: $dibuat_oleh, dibuat_pada: $dibuat_pada
+                dibuat_oleh: $dibuat_oleh, dibuat_pada: $dibuat_pada, untuk_ujian: false
             })
             MERGE (b)-[:HAS_SOAL]->(s)
             """,
@@ -273,3 +273,19 @@ def hapus_soal(session: Session, soal_id: str) -> None:
         tx.run("MATCH (s:Soal {id: $soal_id}) DETACH DELETE s", soal_id=soal_id)
 
     session.execute_write(_tx)
+
+
+def set_soal_ujian(session: Session, soal_id: str, untuk_ujian: bool) -> Optional[dict]:
+    def _tx(tx):
+        record = tx.run(
+            """
+            MATCH (s:Soal {id: $soal_id})
+            SET s.untuk_ujian = $untuk_ujian
+            RETURN s.id AS id
+            """,
+            soal_id=soal_id, untuk_ujian=untuk_ujian,
+        ).single()
+        return record is not None
+
+    ditemukan = session.execute_write(_tx)
+    return get_soal(session, soal_id) if ditemukan else None

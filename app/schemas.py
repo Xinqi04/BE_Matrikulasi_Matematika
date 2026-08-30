@@ -111,6 +111,23 @@ class ModulOut(BaseModel):
     bab: list[BabOut]
 
 
+class StrukturNamaRequest(BaseModel):
+    nama: str = Field(min_length=1, max_length=200)
+
+
+class BabCreateRequest(StrukturNamaRequest):
+    nomor: Optional[str] = Field(default=None, max_length=20)
+
+
+class KonsepCreateRequest(StrukturNamaRequest):
+    deskripsi: str = Field(default="", max_length=2000)
+
+
+class KonsepUpdateRequest(BaseModel):
+    nama_lama: str = Field(min_length=1, max_length=200)
+    nama_baru: str = Field(min_length=1, max_length=200)
+
+
 class VideoOut(BaseModel):
     video_id: str
     judul: str
@@ -238,6 +255,11 @@ class SoalOut(BaseModel):
     tingkat_kesulitan: Optional[str] = None
     dibuat_oleh: Optional[str] = None
     dibuat_pada: Optional[str] = None
+    untuk_ujian: bool = False
+
+
+class SetSoalUjianRequest(BaseModel):
+    untuk_ujian: bool
 
 
 class GenerateSoalRequest(BaseModel):
@@ -352,3 +374,13 @@ class ProgressBabOut(BaseModel):
 class MahasiswaDashboardOut(BaseModel):
     modul: list[ModulOut]
     progress: list[ProgressBabOut]
+    ujian_modul: list[dict] = []
+
+
+class MulaiUjianModulRequest(BaseModel):
+    jenis: str
+
+
+class SubmitUjianModulRequest(BaseModel):
+    attempt_id: str
+    jawaban: list[JawabanItem]

@@ -5,11 +5,13 @@ from app.neo4j_client import neo4j_session
 from app.schemas import (
     DiagnosaOut,
     MahasiswaDashboardOut,
+    MulaiUjianModulRequest,
     ProgressBabOut,
     SoalMahasiswaOut,
     SubmitJawabanRequest,
+    SubmitUjianModulRequest,
 )
-from app.services import diagnosis, enrollment_repo, jawaban_repo, kg_queries, soal_pipeline
+from app.services import diagnosis, enrollment_repo, jawaban_repo, kg_queries, soal_pipeline, ujian_modul_repo
 
 router = APIRouter(prefix="/mahasiswa", tags=["mahasiswa"], dependencies=[Depends(require_role("mahasiswa"))])
 
@@ -21,15 +23,21 @@ def dashboard(user: dict = Depends(require_role("mahasiswa"))):
 
         progress = []
         for modul in modul_list:
+            pretest_selesai = ujian_modul_repo.pretest_sudah_dikirim_untuk_modul(
+                session, user["id"], modul["id"]
+            )
             for bab in modul["bab"]:
                 status, nilai_bab = diagnosis.status_bab(session, user["id"], bab["id"])
-                locked = diagnosis.bab_terkunci(session, user["id"], bab["id"])
+                locked = (not pretest_selesai) or diagnosis.bab_terkunci(
+                    session, user["id"], bab["id"]
+                )
                 progress.append(ProgressBabOut(
                     bab_id=bab["id"], bab_nama=bab["nama"], nomor=bab["nomor"],
                     nilai_bab=nilai_bab, status=status, locked=locked,
                 ))
+        ujian_modul = ujian_modul_repo.status_ujian(session, user["id"])
 
-    return MahasiswaDashboardOut(modul=modul_list, progress=progress)
+    return MahasiswaDashboardOut(modul=modul_list, progress=progress, ujian_modul=ujian_modul)
 
 
 _PESAN_TERKUNCI = "Bab ini masih terkunci. Selesaikan Bab sebelumnya dengan nilai lulus (>= 70) terlebih dahulu."
@@ -41,6 +49,10 @@ def get_soal_bab(bab_id: str, user: dict = Depends(require_role("mahasiswa"))):
     with neo4j_session() as session:
         if not enrollment_repo.mahasiswa_terdaftar_bab(session, user["id"], bab_id):
             raise HTTPException(status_code=403, detail=_PESAN_BELUM_TERDAFTAR)
+        if not ujian_modul_repo.pretest_sudah_dikirim_untuk_bab(session, user["id"], bab_id):
+            raise HTTPException(status_code=403, detail="Selesaikan pretest modul terlebih dahulu.")
+        if diagnosis.status_bab(session, user["id"], bab_id)[0] == "menunggu_penilaian":
+            raise HTTPException(status_code=409, detail="Jawaban bab ini sedang menunggu penilaian dosen.")
         if diagnosis.bab_terkunci(session, user["id"], bab_id):
             raise HTTPException(status_code=403, detail=_PESAN_TERKUNCI)
         soal_list = soal_pipeline.list_soal(session, bab_id)
@@ -72,6 +84,10 @@ def submit_jawaban(bab_id: str, body: SubmitJawabanRequest, user: dict = Depends
     with neo4j_session() as session:
         if not enrollment_repo.mahasiswa_terdaftar_bab(session, user["id"], bab_id):
             raise HTTPException(status_code=403, detail=_PESAN_BELUM_TERDAFTAR)
+        if not ujian_modul_repo.pretest_sudah_dikirim_untuk_bab(session, user["id"], bab_id):
+            raise HTTPException(status_code=403, detail="Selesaikan pretest modul terlebih dahulu.")
+        if diagnosis.status_bab(session, user["id"], bab_id)[0] == "menunggu_penilaian":
+            raise HTTPException(status_code=409, detail="Jawaban bab ini sedang menunggu penilaian dosen.")
         if diagnosis.bab_terkunci(session, user["id"], bab_id):
             raise HTTPException(status_code=403, detail=_PESAN_TERKUNCI)
         hasil = jawaban_repo.submit_jawaban(
@@ -85,3 +101,37 @@ def submit_jawaban(bab_id: str, body: SubmitJawabanRequest, user: dict = Depends
 def hasil_bab(bab_id: str, user: dict = Depends(require_role("mahasiswa"))):
     with neo4j_session() as session:
         return diagnosis.diagnosa_bab(session, user["id"], bab_id)
+
+
+@router.post("/modul/{modul_id}/ujian/mulai")
+def mulai_ujian_modul(modul_id: str, body: MulaiUjianModulRequest, user: dict = Depends(require_role("mahasiswa"))):
+    if body.jenis not in ("pretest", "posttest"):
+        raise HTTPException(status_code=400, detail="Jenis ujian harus pretest atau posttest")
+    with neo4j_session() as session:
+        if body.jenis == "posttest":
+            modul_list = kg_queries.list_modul_untuk_mahasiswa(session, user["id"])
+            target = next((m for m in modul_list if m["id"] == modul_id), None)
+            if target is None:
+                raise HTTPException(status_code=403, detail="Anda tidak terdaftar pada modul ini")
+            if any(diagnosis.status_bab(session, user["id"], bab["id"])[0] not in ("lanjut", "pengayaan") for bab in target["bab"]):
+                raise HTTPException(status_code=403, detail="Selesaikan seluruh bab sebelum memulai posttest")
+        hasil = ujian_modul_repo.mulai_ujian(session, user["id"], modul_id, body.jenis)
+    if hasil is None:
+        raise HTTPException(status_code=403, detail="Anda tidak terdaftar pada modul ini")
+    if hasil["status"] in ("menunggu_penilaian", "dinilai"):
+        raise HTTPException(status_code=409, detail=f"{body.jenis.capitalize()} sudah pernah dikirim")
+    if not hasil["soal"]:
+        raise HTTPException(status_code=409, detail="Dosen belum memilih soal ujian untuk modul ini")
+    return hasil
+
+
+@router.post("/modul/{modul_id}/ujian/jawaban")
+def submit_ujian_modul(modul_id: str, body: SubmitUjianModulRequest, user: dict = Depends(require_role("mahasiswa"))):
+    with neo4j_session() as session:
+        berhasil = ujian_modul_repo.submit_ujian(
+            session, user["id"], modul_id, body.attempt_id,
+            [item.model_dump() for item in body.jawaban],
+        )
+    if not berhasil:
+        raise HTTPException(status_code=409, detail="Ujian sudah dikirim atau sesi tidak ditemukan")
+    return {"detail": "Jawaban berhasil dikirim dan menunggu penilaian dosen."}
