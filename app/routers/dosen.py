@@ -2,15 +2,13 @@ from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 
-from app.auth import hash_password, require_role
+from app.auth import require_role
 from app.config import Settings, get_settings
 from app.job_manager import create_job, run_job
 from app.neo4j_client import neo4j_session
 from app.schemas import (
     BeriNilaiBatchRequest,
     BeriNilaiRequest,
-    BuatDosenRequest,
-    BuatMahasiswaRequest,
     BuatSoalRequest,
     ConfirmSoalDraftRequest,
     DosenDashboardOut,
@@ -20,19 +18,14 @@ from app.schemas import (
     BabCreateRequest,
     KonsepCreateRequest,
     KonsepUpdateRequest,
-    ModulMahasiswaOut,
-    SetAktifRequest,
     SetSoalUjianRequest,
-    SetModulMahasiswaRequest,
     SoalOut,
     StrukturNamaRequest,
     SuggestKonsepRequest,
     SuggestKonsepResponse,
     UpdateSoalRequest,
-    UserCreatedResponse,
-    UserOut,
 )
-from app.services import enrollment_repo, jawaban_repo, kg_queries, soal_pipeline, struktur_repo, ujian_modul_repo, user_repo
+from app.services import enrollment_repo, jawaban_repo, kg_queries, postgres_user_repo, soal_pipeline, struktur_repo, ujian_modul_repo
 from app.services.soal_generator import generate_soal_draft
 
 router = APIRouter(prefix="/dosen", tags=["dosen"], dependencies=[Depends(require_role("dosen"))])
@@ -85,67 +78,11 @@ def edit_konsep(owner_id: str, body: KonsepUpdateRequest):
     return hasil
 
 
-# --- Manajemen mahasiswa & dosen ---
+# --- Mahasiswa yang sudah di-enroll admin (read-only untuk dosen) ---
 
-@router.post("/mahasiswa", response_model=UserCreatedResponse, status_code=201)
-def buat_mahasiswa(body: BuatMahasiswaRequest):
-    password_awal = user_repo.generate_temp_password()
-    with neo4j_session() as session:
-        if user_repo.get_user_by_email(session, body.email) is not None:
-            raise HTTPException(status_code=409, detail="Email sudah terdaftar")
-        user = user_repo.create_user(
-            session, nama=body.nama, email=body.email, password_hash=hash_password(password_awal),
-            role=user_repo.ROLE_MAHASISWA, nim=body.nim,
-        )
-    return UserCreatedResponse(id=user["id"], nama=user["nama"], email=user["email"], role=user["role"], password_awal=password_awal)
-
-
-@router.get("/mahasiswa", response_model=list[UserOut])
+@router.get("/mahasiswa")
 def list_mahasiswa():
-    with neo4j_session() as session:
-        return user_repo.list_users(session, user_repo.ROLE_MAHASISWA)
-
-
-@router.put("/mahasiswa/{user_id}", response_model=dict)
-def set_aktif_mahasiswa(user_id: str, body: SetAktifRequest):
-    with neo4j_session() as session:
-        user_repo.set_aktif(session, user_id, body.aktif)
-    return {"detail": "Status akun diperbarui"}
-
-
-def _pastikan_mahasiswa(session, user_id: str) -> dict:
-    target = user_repo.get_user_by_id(session, user_id)
-    if target is None or target["role"] != user_repo.ROLE_MAHASISWA:
-        raise HTTPException(status_code=404, detail="Mahasiswa tidak ditemukan")
-    return target
-
-
-@router.get("/mahasiswa/{user_id}/modul", response_model=ModulMahasiswaOut)
-def get_modul_mahasiswa(user_id: str):
-    with neo4j_session() as session:
-        _pastikan_mahasiswa(session, user_id)
-        return ModulMahasiswaOut(modul_ids=enrollment_repo.list_modul_ids_mahasiswa(session, user_id))
-
-
-@router.put("/mahasiswa/{user_id}/modul", response_model=dict)
-def set_modul_mahasiswa(user_id: str, body: SetModulMahasiswaRequest):
-    with neo4j_session() as session:
-        _pastikan_mahasiswa(session, user_id)
-        enrollment_repo.set_modul_mahasiswa(session, user_id, body.modul_ids)
-    return {"detail": "Modul mahasiswa diperbarui"}
-
-
-@router.post("/dosen", response_model=UserCreatedResponse, status_code=201)
-def buat_dosen(body: BuatDosenRequest):
-    password_awal = user_repo.generate_temp_password()
-    with neo4j_session() as session:
-        if user_repo.get_user_by_email(session, body.email) is not None:
-            raise HTTPException(status_code=409, detail="Email sudah terdaftar")
-        user = user_repo.create_user(
-            session, nama=body.nama, email=body.email, password_hash=hash_password(password_awal),
-            role=user_repo.ROLE_DOSEN,
-        )
-    return UserCreatedResponse(id=user["id"], nama=user["nama"], email=user["email"], role=user["role"], password_awal=password_awal)
+    return enrollment_repo.list_mahasiswa_terdaftar()
 
 
 # --- Soal ---
@@ -244,10 +181,24 @@ def hapus_soal(soal_id: str):
 
 # --- Penilaian ---
 
+def _isi_identitas_mahasiswa(rows: list[dict]) -> list[dict]:
+    """Identitas canonical ada di PostgreSQL; Neo4j hanya menyimpan anchor ID untuk jawaban."""
+    cache: dict[str, dict | None] = {}
+    for row in rows:
+        mahasiswa_id = str(row.get("mahasiswa_id") or "")
+        if mahasiswa_id not in cache:
+            cache[mahasiswa_id] = postgres_user_repo.get_by_id(mahasiswa_id) if mahasiswa_id else None
+        user = cache[mahasiswa_id]
+        row["mahasiswa_id"] = mahasiswa_id
+        row["mahasiswa_nama"] = user["nama"] if user else (row.get("mahasiswa_nama") or "Mahasiswa")
+        row["mahasiswa_nim"] = user["nim"] if user else "-"
+    return rows
+
 @router.get("/penilaian", response_model=list[JawabanOut])
 def get_penilaian(bab_id: Optional[str] = None, status: Optional[str] = None):
     with neo4j_session() as session:
-        return jawaban_repo.list_jawaban(session, bab_id=bab_id, status=status)
+        rows = jawaban_repo.list_jawaban(session, bab_id=bab_id, status=status)
+    return _isi_identitas_mahasiswa(rows)
 
 
 @router.put("/penilaian/{jawaban_id}", response_model=dict)
@@ -271,7 +222,8 @@ def beri_nilai_batch(body: BeriNilaiBatchRequest):
 @router.get("/penilaian-ujian-modul", response_model=list[dict])
 def get_penilaian_ujian_modul(status: Optional[str] = None):
     with neo4j_session() as session:
-        return ujian_modul_repo.list_jawaban_untuk_dosen(session, status)
+        rows = ujian_modul_repo.list_jawaban_untuk_dosen(session, status)
+    return _isi_identitas_mahasiswa(rows)
 
 
 @router.post("/penilaian-ujian-modul/batch", response_model=dict)

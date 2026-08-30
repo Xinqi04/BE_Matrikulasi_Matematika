@@ -151,7 +151,7 @@ class HapusVideoOut(BaseModel):
 # --- Auth ---
 
 class LoginRequest(BaseModel):
-    email: str
+    nim: str
     password: str
 
 
@@ -165,9 +165,8 @@ class LoginResponse(BaseModel):
 class MeResponse(BaseModel):
     id: str
     nama: str
-    email: str
     role: str
-    nim: Optional[str] = None
+    nim: str
 
 
 class ChangePasswordRequest(BaseModel):
@@ -179,19 +178,18 @@ class ChangePasswordRequest(BaseModel):
 
 class BuatMahasiswaRequest(BaseModel):
     nama: str
-    email: str
-    nim: Optional[str] = None
+    nim: str
 
 
 class BuatDosenRequest(BaseModel):
     nama: str
-    email: str
+    nim: str
 
 
 class UserCreatedResponse(BaseModel):
     id: str
     nama: str
-    email: str
+    nim: str
     role: str
     password_awal: str
 
@@ -199,9 +197,8 @@ class UserCreatedResponse(BaseModel):
 class UserOut(BaseModel):
     id: str
     nama: str
-    email: str
     role: str
-    nim: Optional[str] = None
+    nim: str
     aktif: bool
 
 
@@ -309,6 +306,7 @@ class JawabanOut(BaseModel):
     bab_id: str
     mahasiswa_id: str
     mahasiswa_nama: str
+    mahasiswa_nim: Optional[str] = None
     soal_id: str
     teks_soal: str
     tipe: str

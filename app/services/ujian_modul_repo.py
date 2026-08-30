@@ -6,6 +6,22 @@ from uuid import uuid4
 from neo4j import Session
 
 
+def jumlah_soal_ujian_modul(session: Session, modul_id: str) -> int:
+    """Jumlah soal dari seluruh Bab modul yang sudah ditandai untuk pretest/posttest."""
+    def _tx(tx):
+        record = tx.run(
+            """
+            MATCH (:Modul {id:$modul_id})-[:HAS_BAB]->(:Bab)-[:HAS_SOAL]->(s:Soal)
+            WHERE coalesce(s.untuk_ujian, false) = true
+            RETURN count(DISTINCT s) AS jumlah
+            """,
+            modul_id=modul_id,
+        ).single()
+        return int(record["jumlah"]) if record else 0
+
+    return session.execute_read(_tx)
+
+
 def status_ujian(session: Session, mahasiswa_id: str) -> list[dict]:
     def _tx(tx):
         rows = tx.run(
@@ -62,12 +78,16 @@ def mulai_ujian(session: Session, mahasiswa_id: str, modul_id: str, jenis: str) 
     attempt_id = str(uuid4())
 
     def _tx(tx):
-        enrolled = tx.run(
-            "MATCH (:User {id:$user_id})-[:MENGAMBIL]->(:Modul {id:$modul_id}) RETURN 1 AS ok",
-            user_id=mahasiswa_id, modul_id=modul_id,
+        modul = tx.run(
+            "MATCH (m:Modul {id:$modul_id}) RETURN m.id AS id",
+            modul_id=modul_id,
         ).single()
-        if not enrolled:
+        if not modul:
             return None
+
+        # Enrollment canonical tersimpan di PostgreSQL. Node ringan ini hanya menjadi anchor
+        # attempt ujian di graph dan tidak dipakai untuk autentikasi.
+        tx.run("MERGE (:User {id:$user_id})", user_id=mahasiswa_id)
 
         existing = tx.run(
             """
@@ -159,7 +179,7 @@ def list_jawaban_untuk_dosen(session: Session, status: str | None = None) -> lis
             MATCH (u:User)-[:MEMILIKI_UJIAN]->(a:UjianModul)-[:UNTUK_MODUL]->(m:Modul)
             MATCH (a)-[:HAS_JAWABAN]->(j:JawabanUjian)-[:UNTUK_SOAL]->(s:Soal)
             WHERE $status IS NULL OR j.status = $status
-            RETURN j.id AS id, a.id AS attempt_id, a.jenis AS jenis, m.id AS modul_id,
+            RETURN DISTINCT j.id AS id, a.id AS attempt_id, a.jenis AS jenis, m.id AS modul_id,
                    m.nama_domain AS modul_nama, u.id AS mahasiswa_id, u.nama AS mahasiswa_nama,
                    s.id AS soal_id, s.teks_soal AS teks_soal, s.tipe AS tipe,
                    s.jawaban_referensi AS jawaban_referensi, j.teks_jawaban AS teks_jawaban,

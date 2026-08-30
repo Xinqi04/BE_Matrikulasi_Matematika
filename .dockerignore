@@ -1,0 +1,12 @@
+.venv
+venv
+__pycache__
+*.pyc
+.env
+.env.docker
+.git
+.gitignore
+uploads/*
+kg_snapshot.json
+database
+

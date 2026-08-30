@@ -10,23 +10,17 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from passlib.context import CryptContext
 
 from app.config import Settings, get_settings
-from app.neo4j_client import neo4j_session
-from app.services import user_repo
+from app.services import postgres_user_repo
 
-_pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+_pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 _bearer_scheme = HTTPBearer(auto_error=False)
 
-# DEBUG ONLY: password disimpan plaintext (gak di-hash) biar gampang dicek langsung di Neo4j
-# browser pas debugging. WAJIB balikin ke _pwd_context.hash/.verify sebelum dipakai beneran
-# (bukan cuma di laptop sendiri) -- password_hash di DB saat ini = password asli, bukan hash.
-
-
 def hash_password(password: str) -> str:
-    return password
+    return _pwd_context.hash(password)
 
 
 def verify_password(password: str, password_hash: str) -> bool:
-    return password == password_hash
+    return _pwd_context.verify(password, password_hash)
 
 
 def create_access_token(user_id: str, role: str, settings: Settings) -> str:
@@ -55,13 +49,17 @@ def get_current_user(
     if not user_id:
         raise _unauthorized("Token tidak valid")
 
-    with neo4j_session() as session:
-        user = user_repo.get_user_by_id(session, user_id)
+    user = postgres_user_repo.get_by_id(user_id)
 
     if user is None:
         raise _unauthorized("User tidak ditemukan")
     if not user.get("aktif", True):
         raise _unauthorized("Akun dinonaktifkan")
+
+    # psycopg mengembalikan kolom UUID sebagai objek uuid.UUID. ID pengguna juga dipakai
+    # sebagai parameter query Neo4j, sementara Bolt 5.x hanya menerima nilai primitif.
+    # Normalisasi sekali di batas autentikasi agar seluruh router menerima bentuk yang konsisten.
+    user["id"] = str(user["id"])
 
     return user
 

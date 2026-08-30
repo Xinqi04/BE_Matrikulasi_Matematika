@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.neo4j_client import close_driver
-from app.routers import auth, dosen, jobs, kg, mahasiswa, pdf, youtube
+from app.routers import admin, auth, dosen, jobs, kg, mahasiswa, pdf, youtube
 
 
 @asynccontextmanager
@@ -28,6 +28,7 @@ app.add_middleware(
 )
 
 app.include_router(auth.router)
+app.include_router(admin.router)
 app.include_router(dosen.router)
 app.include_router(mahasiswa.router)
 app.include_router(pdf.router)
