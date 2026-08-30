@@ -96,11 +96,11 @@ def list_modul(session: Session) -> list[dict]:
     return session.execute_read(_tx)
 
 
-def list_modul_untuk_mahasiswa(session: Session, mahasiswa_id: str) -> list[dict]:
+def list_modul_untuk_mahasiswa(session: Session, modul_ids: list[str]) -> list[dict]:
     def _tx(tx):
         result = tx.run(
-            "MATCH (u:User {id: $mahasiswa_id})-[:MENGAMBIL]->(m:Modul)" + _MODUL_TREE_TAIL,
-            mahasiswa_id=mahasiswa_id,
+            "MATCH (m:Modul) WHERE m.id IN $modul_ids" + _MODUL_TREE_TAIL,
+            modul_ids=modul_ids,
         )
         return _map_modul_rows(result)
 

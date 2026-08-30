@@ -4,7 +4,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(env_file=(".env", ".env.docker"), env_file_encoding="utf-8", extra="ignore")
 
     gemini_api_key: str
     gemini_model: str = "gemini-3.1-flash-lite-preview"
@@ -23,6 +23,16 @@ class Settings(BaseSettings):
     neo4j_user: str = "neo4j"
     neo4j_password: str
     neo4j_database: str = "matrikulasi"
+
+    postgres_db: str = "matrikulasi"
+    postgres_user: str = "matrikulasi"
+    postgres_password: str
+    postgres_host: str = "localhost"
+    postgres_port: int = 5432
+
+    @property
+    def database_url(self) -> str:
+        return f"postgresql://{self.postgres_user}:{self.postgres_password}@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
 
     default_modul_id: str = "modul_matrikulasi_matematika_dasar"
     default_nama_domain: str = "Matematika Dasar"

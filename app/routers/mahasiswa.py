@@ -19,7 +19,8 @@ router = APIRouter(prefix="/mahasiswa", tags=["mahasiswa"], dependencies=[Depend
 @router.get("/dashboard", response_model=MahasiswaDashboardOut)
 def dashboard(user: dict = Depends(require_role("mahasiswa"))):
     with neo4j_session() as session:
-        modul_list = kg_queries.list_modul_untuk_mahasiswa(session, user["id"])
+        modul_ids = enrollment_repo.list_modul_ids_mahasiswa(user["id"])
+        modul_list = kg_queries.list_modul_untuk_mahasiswa(session, modul_ids)
 
         progress = []
         for modul in modul_list:
@@ -107,9 +108,17 @@ def hasil_bab(bab_id: str, user: dict = Depends(require_role("mahasiswa"))):
 def mulai_ujian_modul(modul_id: str, body: MulaiUjianModulRequest, user: dict = Depends(require_role("mahasiswa"))):
     if body.jenis not in ("pretest", "posttest"):
         raise HTTPException(status_code=400, detail="Jenis ujian harus pretest atau posttest")
+    modul_ids = enrollment_repo.list_modul_ids_mahasiswa(user["id"])
+    if modul_id not in modul_ids:
+        raise HTTPException(status_code=403, detail="Anda tidak terdaftar pada modul ini")
     with neo4j_session() as session:
+        if ujian_modul_repo.jumlah_soal_ujian_modul(session, modul_id) == 0:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Belum ada soal untuk {body.jenis} modul ini. Silakan hubungi dosen.",
+            )
         if body.jenis == "posttest":
-            modul_list = kg_queries.list_modul_untuk_mahasiswa(session, user["id"])
+            modul_list = kg_queries.list_modul_untuk_mahasiswa(session, modul_ids)
             target = next((m for m in modul_list if m["id"] == modul_id), None)
             if target is None:
                 raise HTTPException(status_code=403, detail="Anda tidak terdaftar pada modul ini")
@@ -117,11 +126,11 @@ def mulai_ujian_modul(modul_id: str, body: MulaiUjianModulRequest, user: dict = 
                 raise HTTPException(status_code=403, detail="Selesaikan seluruh bab sebelum memulai posttest")
         hasil = ujian_modul_repo.mulai_ujian(session, user["id"], modul_id, body.jenis)
     if hasil is None:
-        raise HTTPException(status_code=403, detail="Anda tidak terdaftar pada modul ini")
+        raise HTTPException(status_code=404, detail="Modul tidak ditemukan")
     if hasil["status"] in ("menunggu_penilaian", "dinilai"):
         raise HTTPException(status_code=409, detail=f"{body.jenis.capitalize()} sudah pernah dikirim")
     if not hasil["soal"]:
-        raise HTTPException(status_code=409, detail="Dosen belum memilih soal ujian untuk modul ini")
+        raise HTTPException(status_code=409, detail=f"Belum ada soal untuk {body.jenis} modul ini. Silakan hubungi dosen.")
     return hasil
 
 

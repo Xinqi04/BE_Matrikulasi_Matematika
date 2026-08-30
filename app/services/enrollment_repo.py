@@ -1,44 +1,47 @@
-"""Assignment mahasiswa ke Modul lewat relationship `(:User)-[:MENGAMBIL]->(:Modul)`. Mahasiswa
-cuma bisa lihat/kerjain Bab dari Modul yang dia ambil -- lihat `kg_queries.list_modul_untuk_mahasiswa`
-dan pemakaian `mahasiswa_terdaftar_bab` di router mahasiswa.
-"""
+"""Enrollment mahasiswa ke modul dengan PostgreSQL sebagai source of truth."""
 
 from __future__ import annotations
 
 from neo4j import Session
 
+from app.postgres_client import postgres_connection
 
-def set_modul_mahasiswa(session: Session, mahasiswa_id: str, modul_ids: list[str]) -> None:
-    """Replace semantics: assignment lama dihapus semua, diganti sesuai `modul_ids`. List kosong
-    berarti mahasiswa dicabut dari semua Modul -- itu perilaku yang disengaja."""
 
-    def _tx(tx):
-        tx.run(
-            "MATCH (u:User {id: $mahasiswa_id})-[r:MENGAMBIL]->(:Modul) DELETE r",
-            mahasiswa_id=mahasiswa_id,
-        )
-        tx.run(
+def set_modul_mahasiswa(mahasiswa_id: str, modul_ids: list[str]) -> None:
+    modul_ids = list(dict.fromkeys(modul_ids))
+    with postgres_connection() as conn:
+        conn.execute("DELETE FROM enrollments WHERE student_id = %s", (mahasiswa_id,))
+        if modul_ids:
+            with conn.cursor() as cursor:
+                cursor.executemany(
+                    "INSERT INTO enrollments (student_id, module_id) VALUES (%s, %s)",
+                    [(mahasiswa_id, modul_id) for modul_id in modul_ids],
+                )
+
+
+def list_modul_ids_mahasiswa(mahasiswa_id: str) -> list[str]:
+    with postgres_connection() as conn:
+        rows = conn.execute(
+            "SELECT module_id FROM enrollments WHERE student_id = %s ORDER BY module_id",
+            (mahasiswa_id,),
+        ).fetchall()
+    return [row["module_id"] for row in rows]
+
+
+def list_mahasiswa_terdaftar() -> list[dict]:
+    with postgres_connection() as conn:
+        rows = conn.execute(
             """
-            MATCH (u:User {id: $mahasiswa_id})
-            UNWIND $modul_ids AS modul_id
-            MATCH (m:Modul {id: modul_id})
-            MERGE (u)-[:MENGAMBIL]->(m)
-            """,
-            mahasiswa_id=mahasiswa_id, modul_ids=modul_ids,
-        )
-
-    session.execute_write(_tx)
-
-
-def list_modul_ids_mahasiswa(session: Session, mahasiswa_id: str) -> list[str]:
-    def _tx(tx):
-        result = tx.run(
-            "MATCH (:User {id: $mahasiswa_id})-[:MENGAMBIL]->(m:Modul) RETURN m.id AS id ORDER BY m.id",
-            mahasiswa_id=mahasiswa_id,
-        )
-        return [r["id"] for r in result]
-
-    return session.execute_read(_tx)
+            SELECT u.id, u.nama, u.nim, u.aktif,
+                   array_agg(e.module_id ORDER BY e.module_id) AS modul_ids
+            FROM users u
+            JOIN enrollments e ON e.student_id = u.id
+            WHERE u.role = 'mahasiswa'
+            GROUP BY u.id, u.nama, u.nim, u.aktif
+            ORDER BY u.nama
+            """
+        ).fetchall()
+    return [{**row, "id": str(row["id"])} for row in rows]
 
 
 def mahasiswa_terdaftar_bab(session: Session, mahasiswa_id: str, bab_id: str) -> bool:
@@ -46,15 +49,11 @@ def mahasiswa_terdaftar_bab(session: Session, mahasiswa_id: str, bab_id: str) ->
     ada Modul-nya sama sekali dianggap False (fail closed)."""
 
     def _tx(tx):
-        result = tx.run(
-            """
-            MATCH (m:Modul)-[:HAS_BAB]->(:Bab {id: $bab_id})
-            OPTIONAL MATCH (:User {id: $mahasiswa_id})-[r:MENGAMBIL]->(m)
-            RETURN r IS NOT NULL AS terdaftar
-            """,
-            bab_id=bab_id, mahasiswa_id=mahasiswa_id,
-        )
-        record = result.single()
-        return bool(record and record["terdaftar"])
+        record = tx.run(
+            "MATCH (m:Modul)-[:HAS_BAB]->(:Bab {id: $bab_id}) RETURN m.id AS modul_id LIMIT 1",
+            bab_id=bab_id,
+        ).single()
+        return record["modul_id"] if record else None
 
-    return session.execute_read(_tx)
+    modul_id = session.execute_read(_tx)
+    return bool(modul_id and modul_id in list_modul_ids_mahasiswa(mahasiswa_id))

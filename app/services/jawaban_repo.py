@@ -54,7 +54,7 @@ def list_jawaban(
             WHERE ($bab_id IS NULL OR b.id = $bab_id)
               AND ($status IS NULL OR r.status = $status)
               AND ($mahasiswa_id IS NULL OR u.id = $mahasiswa_id)
-            RETURN r.id AS id, b.id AS bab_id, u.id AS mahasiswa_id, u.nama AS mahasiswa_nama,
+            RETURN DISTINCT r.id AS id, b.id AS bab_id, u.id AS mahasiswa_id, u.nama AS mahasiswa_nama,
                    s.id AS soal_id, s.teks_soal AS teks_soal, s.tipe AS tipe,
                    s.jawaban_referensi AS jawaban_referensi, r.teks_jawaban AS teks_jawaban,
                    r.nilai AS nilai, r.status AS status, r.dijawab_pada AS dijawab_pada,

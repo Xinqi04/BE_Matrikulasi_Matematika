@@ -1,7 +1,9 @@
 .env
+.env.docker
 __pycache__/
 *.pyc
 .venv/
 venv/
 uploads/*
 !uploads/.gitkeep
+kg_snapshot.json
