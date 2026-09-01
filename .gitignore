@@ -6,4 +6,3 @@ __pycache__/
 venv/
 uploads/*
 !uploads/.gitkeep
-kg_snapshot.json

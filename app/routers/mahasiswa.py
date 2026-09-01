@@ -36,7 +36,7 @@ def dashboard(user: dict = Depends(require_role("mahasiswa"))):
                     bab_id=bab["id"], bab_nama=bab["nama"], nomor=bab["nomor"],
                     nilai_bab=nilai_bab, status=status, locked=locked,
                 ))
-        ujian_modul = ujian_modul_repo.status_ujian(session, user["id"])
+        ujian_modul = ujian_modul_repo.status_ujian(session, user["id"], modul_ids)
 
     return MahasiswaDashboardOut(modul=modul_list, progress=progress, ujian_modul=ujian_modul)
 
