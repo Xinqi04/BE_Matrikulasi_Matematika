@@ -7,6 +7,5 @@ __pycache__
 .git
 .gitignore
 uploads/*
-kg_snapshot.json
 database
 

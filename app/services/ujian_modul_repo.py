@@ -22,15 +22,16 @@ def jumlah_soal_ujian_modul(session: Session, modul_id: str) -> int:
     return session.execute_read(_tx)
 
 
-def status_ujian(session: Session, mahasiswa_id: str) -> list[dict]:
+def status_ujian(session: Session, mahasiswa_id: str, modul_ids: list[str]) -> list[dict]:
     def _tx(tx):
         rows = tx.run(
             """
-            MATCH (u:User {id: $user_id})-[:MENGAMBIL]->(m:Modul)
-            OPTIONAL MATCH (u)-[:MEMILIKI_UJIAN]->(a:UjianModul)-[:UNTUK_MODUL]->(m)
+            UNWIND $modul_ids AS modul_id
+            MATCH (m:Modul {id: modul_id})
+            OPTIONAL MATCH (u:User {id: $user_id})-[:MEMILIKI_UJIAN]->(a:UjianModul)-[:UNTUK_MODUL]->(m)
             RETURN m.id AS modul_id, a.jenis AS jenis, a.status AS status
             """,
-            user_id=mahasiswa_id,
+            user_id=mahasiswa_id, modul_ids=modul_ids,
         )
         result = {}
         for row in rows:
@@ -183,7 +184,8 @@ def list_jawaban_untuk_dosen(session: Session, status: str | None = None) -> lis
                    m.nama_domain AS modul_nama, u.id AS mahasiswa_id, u.nama AS mahasiswa_nama,
                    s.id AS soal_id, s.teks_soal AS teks_soal, s.tipe AS tipe,
                    s.jawaban_referensi AS jawaban_referensi, j.teks_jawaban AS teks_jawaban,
-                   j.nilai AS nilai, j.status AS status
+                   j.nilai AS nilai, j.status AS status, j.dijawab_pada AS dijawab_pada,
+                   j.dinilai_pada AS dinilai_pada
             ORDER BY j.dijawab_pada
             """,
             status=status,

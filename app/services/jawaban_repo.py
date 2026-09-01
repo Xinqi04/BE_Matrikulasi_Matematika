@@ -25,8 +25,13 @@ def submit_jawaban(session: Session, mahasiswa_id: str, bab_id: str, daftar_jawa
                 """
                 MATCH (b:Bab {id: $bab_id})-[:HAS_SOAL]->(s:Soal {id: $soal_id})
                 MATCH (u:User {id: $mahasiswa_id})
+                OPTIONAL MATCH (u)-[sebelumnya:MENJAWAB]->(s)
+                WITH s, u, count(sebelumnya) AS punya_jawaban
+                ORDER BY punya_jawaban DESC
+                WITH s, head(collect(u)) AS u
                 MERGE (u)-[r:MENJAWAB]->(s)
-                ON CREATE SET r.id = $new_id
+                ON CREATE SET r.id = $new_id, r.percobaan = 1
+                ON MATCH SET r.percobaan = coalesce(r.percobaan, 1) + 1
                 SET r.teks_jawaban = $teks_jawaban, r.status = $status, r.nilai = null,
                     r.dijawab_pada = $dijawab_pada, r.dinilai_pada = null
                 RETURN r.id AS id, s.id AS soal_id
@@ -57,7 +62,8 @@ def list_jawaban(
             RETURN DISTINCT r.id AS id, b.id AS bab_id, u.id AS mahasiswa_id, u.nama AS mahasiswa_nama,
                    s.id AS soal_id, s.teks_soal AS teks_soal, s.tipe AS tipe,
                    s.jawaban_referensi AS jawaban_referensi, r.teks_jawaban AS teks_jawaban,
-                   r.nilai AS nilai, r.status AS status, r.dijawab_pada AS dijawab_pada,
+                   r.nilai AS nilai, r.status AS status, coalesce(r.percobaan, 1) AS percobaan,
+                   r.dijawab_pada AS dijawab_pada,
                    r.dinilai_pada AS dinilai_pada
             ORDER BY r.dijawab_pada
             """,

@@ -314,6 +314,7 @@ class JawabanOut(BaseModel):
     teks_jawaban: str
     nilai: Optional[float] = None
     status: str
+    percobaan: int = 1
     dijawab_pada: Optional[str] = None
     dinilai_pada: Optional[str] = None
 
