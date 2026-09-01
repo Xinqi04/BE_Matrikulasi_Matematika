@@ -42,6 +42,7 @@ backend/
 ├── database/               # Skema dan init database
 ├── scripts/                # Seed dan utilitas migrasi
 ├── uploads/                # Upload lokal jika berjalan tanpa Docker
+├── kg_snapshot.json        # Snapshot awal struktur knowledge graph
 ├── .env.example            # Contoh konfigurasi aplikasi
 ├── .env.docker.example     # Contoh konfigurasi database Docker
 ├── Dockerfile
@@ -143,6 +144,42 @@ Alamat layanan:
 - Swagger/OpenAPI: http://localhost:8000/docs
 - Neo4j Browser: http://localhost:7474
 - PostgreSQL dari host: `localhost:5433`
+
+## Mengimpor knowledge graph saat setup pertama kali
+
+Setelah semua container berstatus sehat, masukkan data awal knowledge graph dari
+`kg_snapshot.json`. Pastikan file tersebut berada langsung di folder `backend`:
+
+```text
+backend/
+├── kg_snapshot.json
+├── docker-compose.yml
+└── scripts/
+```
+
+Jalankan perintah berikut dari folder `backend`:
+
+```powershell
+docker compose --env-file .env.docker cp .\kg_snapshot.json backend:/tmp/kg_snapshot.json
+docker compose --env-file .env.docker exec backend python scripts/import_kg_snapshot.py `
+  --uri bolt://neo4j:7687 `
+  --database neo4j `
+  --input /tmp/kg_snapshot.json
+```
+
+Jika berhasil, terminal menampilkan jumlah node dan relasi yang diimpor, misalnya:
+
+```text
+Node: 120, relasi: 245 berhasil diimpor.
+```
+
+Impor ini cukup dilakukan sekali setelah volume Neo4j pertama kali dibuat. Script menggunakan
+`MERGE`, sehingga aman dijalankan ulang jika proses sebelumnya terputus atau hasil impor perlu
+dipastikan kembali.
+
+Snapshot hanya berisi struktur knowledge graph seperti modul, bab, subbab, konsep, dan materi.
+Snapshot tidak berisi akun, password, enrollment, jawaban, atau nilai. Buat akun dummy secara
+terpisah menggunakan langkah pada bagian berikutnya.
 
 ## Membuat akun dummy
 
