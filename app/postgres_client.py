@@ -16,6 +16,7 @@ def postgres_connection():
         host=settings.postgres_host,
         port=settings.postgres_port,
         row_factory=dict_row,
+        connect_timeout=5,
     )
     try:
         yield connection

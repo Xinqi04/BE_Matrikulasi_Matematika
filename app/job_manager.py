@@ -1,4 +1,5 @@
-import threading
+from psycopg.types.json import Jsonb
+from app.postgres_client import postgres_connection
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
@@ -25,65 +26,43 @@ class JobRecord(BaseModel):
     updated_at: datetime
 
 
-_jobs: dict[str, JobRecord] = {}
-_lock = threading.Lock()
-
-
 def create_job(job_type: str) -> JobRecord:
-    now = datetime.now(timezone.utc)
-    job = JobRecord(id=str(uuid.uuid4()), type=job_type, created_at=now, updated_at=now)
-    with _lock:
-        _jobs[job.id] = job
-    return job
+    job_id = str(uuid.uuid4())
+    with postgres_connection() as conn:
+        row = conn.execute("INSERT INTO background_jobs(id,type,status) VALUES (%s,%s,'pending') RETURNING *", (job_id, job_type)).fetchone()
+        return JobRecord(**row)
 
 
 def get_job(job_id: str) -> Optional[JobRecord]:
-    with _lock:
-        return _jobs.get(job_id)
+    with postgres_connection() as conn:
+        row = conn.execute("SELECT * FROM background_jobs WHERE id=%s", (job_id,)).fetchone()
+        return JobRecord(**row) if row else None
 
 
 def list_jobs() -> list[JobRecord]:
-    with _lock:
-        return sorted(_jobs.values(), key=lambda j: j.created_at, reverse=True)
+    with postgres_connection() as conn:
+        return [JobRecord(**row) for row in conn.execute("SELECT * FROM background_jobs ORDER BY created_at DESC LIMIT 200").fetchall()]
 
 
 def log(job_id: str, message: str) -> None:
-    with _lock:
-        job = _jobs.get(job_id)
-        if job is None:
-            return
-        job.log.append(message)
-        job.updated_at = datetime.now(timezone.utc)
-    print(f"[job {job_id}] {message}")
+    with postgres_connection() as conn:
+        conn.execute("UPDATE background_jobs SET log=log || %s,updated_at=now() WHERE id=%s", (Jsonb([message]), job_id))
 
 
 def _set_status(job_id: str, status: JobStatus) -> None:
-    with _lock:
-        job = _jobs.get(job_id)
-        if job is None:
-            return
-        job.status = status
-        job.updated_at = datetime.now(timezone.utc)
+    with postgres_connection() as conn:
+        conn.execute("UPDATE background_jobs SET status=%s,updated_at=now() WHERE id=%s", (status.value, job_id))
 
 
 def mark_done(job_id: str, result: Any) -> None:
-    with _lock:
-        job = _jobs.get(job_id)
-        if job is None:
-            return
-        job.status = JobStatus.DONE
-        job.result = result
-        job.updated_at = datetime.now(timezone.utc)
+    with postgres_connection() as conn:
+        # Preserve confirmation/discard status if an early confirmation raced completion.
+        conn.execute("UPDATE background_jobs SET status='done',result=%s || coalesce(result,'{}'::jsonb),error=NULL,updated_at=now() WHERE id=%s", (Jsonb(result), job_id))
 
 
 def mark_error(job_id: str, error: str) -> None:
-    with _lock:
-        job = _jobs.get(job_id)
-        if job is None:
-            return
-        job.status = JobStatus.ERROR
-        job.error = error
-        job.updated_at = datetime.now(timezone.utc)
+    with postgres_connection() as conn:
+        conn.execute("UPDATE background_jobs SET status='error',error=%s,updated_at=now() WHERE id=%s", (error, job_id))
 
 
 def run_job(job_id: str, fn: Callable[[Callable[[str], None]], Any]) -> None:

@@ -136,11 +136,16 @@ def mulai_ujian_modul(modul_id: str, body: MulaiUjianModulRequest, user: dict = 
 
 @router.post("/modul/{modul_id}/ujian/jawaban")
 def submit_ujian_modul(modul_id: str, body: SubmitUjianModulRequest, user: dict = Depends(require_role("mahasiswa"))):
-    with neo4j_session() as session:
-        berhasil = ujian_modul_repo.submit_ujian(
-            session, user["id"], modul_id, body.attempt_id,
-            [item.model_dump() for item in body.jawaban],
-        )
+    if modul_id not in enrollment_repo.list_modul_ids_mahasiswa(user["id"]):
+        raise HTTPException(status_code=403, detail="Anda tidak terdaftar pada modul ini")
+    try:
+        with neo4j_session() as session:
+            berhasil = ujian_modul_repo.submit_ujian(
+                session, user["id"], modul_id, body.attempt_id,
+                [item.model_dump() for item in body.jawaban],
+            )
+    except ujian_modul_repo.InvalidSubmission as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     if not berhasil:
         raise HTTPException(status_code=409, detail="Ujian sudah dikirim atau sesi tidak ditemukan")
     return {"detail": "Jawaban berhasil dikirim dan menunggu penilaian dosen."}

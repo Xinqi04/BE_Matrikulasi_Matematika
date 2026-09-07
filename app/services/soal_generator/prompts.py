@@ -29,6 +29,9 @@ Tugas: buat TEPAT {jumlah} soal untuk Bab ini.
   variasi. Variasikan kombinasi antar soal (ada yang 1 konsep, ada yang beberapa) sepanjang tetap
   masuk akal.
 - Setiap soal harus jelas, tidak ambigu, dan bisa dijawab murni dari materi Bab ini.
+- Dalam teks_soal dan jawaban_referensi, tulis ekspresi matematika sebagai LaTeX
+  di antara tanda dolar untuk inline atau dolar ganda untuk blok. Gunakan notasi
+  LaTeX untuk pecahan, akar, pangkat, dan simbol; escape backslash sesuai JSON.
 - Soal tipe "esai" wajib punya "jawaban_referensi" berupa ringkasan poin-poin kunci/rubrik singkat
   (bukan jawaban penuh kata demi kata). Soal tipe "isian_singkat" wajib punya "jawaban_referensi"
   berupa jawaban singkat & pasti (satu istilah/nilai/kalimat pendek).

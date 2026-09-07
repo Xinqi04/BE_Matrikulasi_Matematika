@@ -1,5 +1,6 @@
 from functools import lru_cache
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -38,6 +39,8 @@ class Settings(BaseSettings):
     default_nama_domain: str = "Matematika Dasar"
 
     upload_dir: str = "uploads"
+    cors_origins: list[str] = ["*"]
+    max_pdf_upload_mb: int = Field(default=20, ge=1, le=200)
 
     jwt_secret_key: str
     jwt_expire_minutes: int = 60 * 24

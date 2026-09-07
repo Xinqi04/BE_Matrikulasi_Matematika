@@ -178,7 +178,7 @@ def _simpan_materi_youtube(tx, video: dict, konsep_terklasifikasi: list[str]):
         MERGE (m:Materi {id: $id})
         SET m.judul = $judul, m.kontributor = $kontributor, m.sumber = $sumber, m.tipe = 'youtube',
             m.thumbnail = $thumbnail, m.published_at = $published_at,
-            m.basis_klasifikasi = 'judul_deskripsi', m.status_validasi = 'draft'
+            m.basis_klasifikasi = 'judul_deskripsi', m.status_validasi = 'valid'
         """,
         id=video["video_id"], judul=video["title"], kontributor=video["channel"],
         sumber=video["link"], thumbnail=video["thumbnail"], published_at=video["published_at"],
@@ -299,10 +299,9 @@ def run_youtube_classification_preview(
     )
     log(f"Konsep terklasifikasi: {konsep_terpilih}")
 
-    youtube_draft_store.save_draft(job_id, {"video": video, "daftar_konsep": daftar_konsep})
     log("Klasifikasi selesai -- menunggu konfirmasi dosen sebelum disimpan ke Knowledge Graph.")
 
-    return {
+    preview = {
         "video_id": video["video_id"],
         "judul": video["title"],
         "channel": video["channel"],
@@ -313,6 +312,9 @@ def run_youtube_classification_preview(
         "status_penyimpanan": "menunggu_konfirmasi",
     }
 
+    youtube_draft_store.save_draft(job_id, {"video": video, "daftar_konsep": daftar_konsep, "preview": preview})
+    return preview
+
 
 def confirm_youtube_classification(job_id: str, konsep_final: list[str]) -> Optional[dict]:
     """Simpan video + konsep (hasil editan dosen, HARUS subset dari closed vocabulary yang
@@ -320,16 +322,16 @@ def confirm_youtube_classification(job_id: str, konsep_final: list[str]) -> Opti
     disaring (dilewati diam-diam sama `_simpan_video`, jadi disaring duluan di sini biar
     responsenya jujur soal apa yang beneran kesimpan). Return None kalau draft gak ada."""
 
-    draft = youtube_draft_store.pop_draft(job_id)
-    if draft is None:
-        return None
+    from app.services.graph_confirmation import apply_once
+    return youtube_draft_store.confirm(job_id, lambda draft: apply_once(job_id, lambda tx: _confirm_youtube(tx, draft, konsep_final)))
 
+
+def _confirm_youtube(tx, draft, konsep_final):
     video, daftar_konsep = draft["video"], draft["daftar_konsep"]
     daftar_lower = {k.lower(): k for k in daftar_konsep}
     konsep_valid = [daftar_lower[k.strip().lower()] for k in konsep_final if k.strip().lower() in daftar_lower]
 
-    with neo4j_session() as session:
-        simpan_video_ke_kg(session, video, konsep_valid)
+    _simpan_materi_youtube(tx, video, konsep_valid)
 
     return {
         "detail": "Video berhasil disimpan ke Knowledge Graph.",
@@ -343,4 +345,4 @@ def confirm_youtube_classification(job_id: str, konsep_final: list[str]) -> Opti
 
 def discard_youtube_draft(job_id: str) -> bool:
     """Buang draft klasifikasi tanpa nulis apa pun ke Neo4j. Return False kalau draft-nya udah gak ada."""
-    return youtube_draft_store.pop_draft(job_id) is not None
+    return youtube_draft_store.discard(job_id)
