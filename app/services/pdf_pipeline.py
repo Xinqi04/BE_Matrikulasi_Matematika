@@ -165,7 +165,13 @@ def simpan_struktur_dan_konsep(
     unit_list: list[dict], unit_final: list[dict], log: LogFn,
 ):
     session.execute_write(_setup_constraints)
-    session.execute_write(_simpan_modul, modul_id, nama_domain)
+    return session.execute_write(_write_structure, modul_id, nama_domain, unit_list, unit_final, log)
+
+
+def _write_structure(tx, modul_id, nama_domain, unit_list, unit_final, log):
+    def call(fn, *args):
+        return fn(tx, *args)
+    call(_simpan_modul, modul_id, nama_domain)
 
     # Struktur (Bab/SubBab) disimpan dari unit_list LENGKAP (bukan unit_final) -- unit_final
     # sudah membuang entry "bab" yang punya SubBab (teksnya dicakup di level SubBab), jadi kalau
@@ -173,10 +179,10 @@ def simpan_struktur_dan_konsep(
     jumlah_bab, jumlah_subbab = 0, 0
     for u in unit_list:
         if u["level"] == "bab":
-            session.execute_write(_simpan_bab, modul_id, u)
+            call(_simpan_bab, modul_id, u)
             jumlah_bab += 1
         else:
-            session.execute_write(_simpan_subbab, modul_id, u)
+            call(_simpan_subbab, modul_id, u)
             jumlah_subbab += 1
     log(f"Struktur graph tersimpan: {jumlah_bab} node :Bab, {jumlah_subbab} node :SubBab.")
 
@@ -184,7 +190,7 @@ def simpan_struktur_dan_konsep(
     for u in unit_final:
         unit_id = _hitung_unit_id(modul_id, u)
         konsep_list = u.get("hasil_konsep", [])
-        session.execute_write(_simpan_konsep, unit_id, konsep_list)
+        call(_simpan_konsep, unit_id, konsep_list)
         total_konsep += len(konsep_list)
         log(f"Konsep ditempel: {_label_unit(u)} - {len(konsep_list)} konsep")
 
@@ -283,13 +289,11 @@ def run_pdf_extraction_preview(
         u["hasil_konsep"] = [{"nama": k.nama, "deskripsi": k.deskripsi} for k in konsep_list]
         log(f"  -> {_label_unit(u)} - {u['judul']}: {len(u['hasil_konsep'])} konsep final")
 
-    pdf_draft_store.save_draft(job_id, {
-        "modul_id": modul_id, "nama_domain": nama_domain, "unit_list": unit_list, "unit_final": unit_final,
-    })
+
     log("Ekstraksi selesai -- menunggu konfirmasi dosen sebelum disimpan ke Knowledge Graph.")
 
     unit_ringkas = _ringkasan_unit(modul_id, unit_final)
-    return {
+    preview = {
         "modul_id": modul_id,
         "nama_domain": nama_domain,
         "jumlah_unit": len(unit_final),
@@ -298,6 +302,12 @@ def run_pdf_extraction_preview(
         "unit": unit_ringkas,
     }
 
+    pdf_draft_store.save_draft(job_id, {
+        "modul_id": modul_id, "nama_domain": nama_domain, "unit_list": unit_list, "unit_final": unit_final,
+        "preview": preview,
+    })
+    return preview
+
 
 def confirm_pdf_extraction(job_id: str, konsep_overrides: dict[str, list[dict]]) -> Optional[dict]:
     """Timpa `hasil_konsep` tiap unit sesuai editan dosen (`konsep_overrides`: unit_id -> daftar
@@ -305,10 +315,11 @@ def confirm_pdf_extraction(job_id: str, konsep_overrides: dict[str, list[dict]])
     Return None kalau draft-nya gak ada (job_id salah, atau sudah dikonfirmasi/dibuang
     sebelumnya)."""
 
-    draft = pdf_draft_store.pop_draft(job_id)
-    if draft is None:
-        return None
+    from app.services.graph_confirmation import apply_once
+    return pdf_draft_store.confirm(job_id, lambda draft: apply_once(job_id, lambda tx: _confirm_pdf(tx, draft, konsep_overrides)))
 
+
+def _confirm_pdf(tx, draft, konsep_overrides):
     modul_id, nama_domain = draft["modul_id"], draft["nama_domain"]
     unit_list, unit_final = draft["unit_list"], draft["unit_final"]
 
@@ -320,8 +331,7 @@ def confirm_pdf_extraction(job_id: str, konsep_overrides: dict[str, list[dict]])
                 for k in konsep_overrides[unit_id] if k.get("nama", "").strip()
             ]
 
-    with neo4j_session() as session:
-        total_konsep = simpan_struktur_dan_konsep(session, modul_id, nama_domain, unit_list, unit_final, log=lambda _msg: None)
+    total_konsep = _write_structure(tx, modul_id, nama_domain, unit_list, unit_final, log=lambda _msg: None)
 
     return {
         "detail": "Struktur & konsep berhasil disimpan ke Knowledge Graph.",
@@ -332,7 +342,7 @@ def confirm_pdf_extraction(job_id: str, konsep_overrides: dict[str, list[dict]])
 
 def discard_pdf_draft(job_id: str) -> bool:
     """Buang draft ekstraksi tanpa nulis apa pun ke Neo4j. Return False kalau draft-nya udah gak ada."""
-    return pdf_draft_store.pop_draft(job_id) is not None
+    return pdf_draft_store.discard(job_id)
 
 
 # --- Hapus modul ---

@@ -1,9 +1,11 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+
+from app.auth import require_role
 
 from app.job_manager import get_job, list_jobs
 from app.schemas import JobStatusResponse
 
-router = APIRouter(prefix="/jobs", tags=["jobs"])
+router = APIRouter(prefix="/jobs", tags=["jobs"], dependencies=[Depends(require_role("dosen"))])
 
 
 @router.get("", response_model=list[JobStatusResponse])

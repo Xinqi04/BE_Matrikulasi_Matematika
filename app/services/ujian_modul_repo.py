@@ -6,6 +6,10 @@ from uuid import uuid4
 from neo4j import Session
 
 
+class InvalidSubmission(ValueError):
+    pass
+
+
 def jumlah_soal_ujian_modul(session: Session, modul_id: str) -> int:
     """Jumlah soal dari seluruh Bab modul yang sudah ditandai untuk pretest/posttest."""
     def _tx(tx):
@@ -122,10 +126,11 @@ def mulai_ujian(session: Session, mahasiswa_id: str, modul_id: str, jenis: str) 
                 tx.run(
                     """
                     MATCH (u:User {id:$user_id})-[:MEMILIKI_UJIAN]->(pre:UjianModul {jenis:'pretest'})-[:MENGGUNAKAN_SOAL]->(s:Soal)
+                    MATCH (pre)-[:UNTUK_MODUL]->(:Modul {id:$modul_id})
                     MATCH (u)-[:MEMILIKI_UJIAN]->(post:UjianModul {id:$id})
                     MERGE (post)-[:MENGGUNAKAN_SOAL]->(s)
                     """,
-                    user_id=mahasiswa_id, id=attempt_id,
+                    user_id=mahasiswa_id, id=attempt_id, modul_id=modul_id,
                 )
             attempt = {"id": attempt_id, "status": "dikerjakan"}
 
@@ -146,22 +151,37 @@ def mulai_ujian(session: Session, mahasiswa_id: str, modul_id: str, jenis: str) 
 
 
 def submit_ujian(session: Session, mahasiswa_id: str, modul_id: str, attempt_id: str, jawaban: list[dict]) -> bool:
+    ids = [item["soal_id"] for item in jawaban]
+    if not ids or len(ids) != len(set(ids)):
+        raise InvalidSubmission("Jawaban tidak boleh kosong atau berisi soal duplikat")
+    if any(not item["teks_jawaban"].strip() for item in jawaban):
+        raise InvalidSubmission("Semua soal harus dijawab")
+
     def _tx(tx):
+        # Acquire a write lock before reading status, serializing concurrent submissions.
         attempt = tx.run(
             """
-            MATCH (u:User {id:$user_id})-[:MEMILIKI_UJIAN]->(a:UjianModul {id:$attempt_id, status:'dikerjakan'})-[:UNTUK_MODUL]->(:Modul {id:$modul_id})
-            RETURN a
+            MATCH (u:User {id:$user_id})-[:MEMILIKI_UJIAN]->(a:UjianModul {id:$attempt_id})-[:UNTUK_MODUL]->(:Modul {id:$modul_id})
+            SET a._submit_lock = true
+            RETURN a.status AS status
             """,
             user_id=mahasiswa_id, attempt_id=attempt_id, modul_id=modul_id,
         ).single()
         if not attempt:
             return False
+        tx.run("MATCH (a:UjianModul {id:$id}) REMOVE a._submit_lock", id=attempt_id).consume()
+        if attempt["status"] != "dikerjakan":
+            return False
+        expected = tx.run(
+            "MATCH (:UjianModul {id:$id})-[:MENGGUNAKAN_SOAL]->(s:Soal) RETURN s.id AS id",
+            id=attempt_id,
+        )
+        if set(ids) != {row["id"] for row in expected}:
+            raise InvalidSubmission("Jawaban harus tepat mencakup seluruh soal pada sesi ujian ini")
         for item in jawaban:
             tx.run(
                 """
-                MATCH (a:UjianModul {id:$attempt_id})-[:UNTUK_MODUL]->(m:Modul {id:$modul_id})
-                MATCH (m)-[:HAS_BAB]->(:Bab)-[:HAS_SOAL]->(s:Soal {id:$soal_id})
-                WHERE coalesce(s.untuk_ujian, false) = true
+                MATCH (a:UjianModul {id:$attempt_id})-[:MENGGUNAKAN_SOAL]->(s:Soal {id:$soal_id})
                 CREATE (j:JawabanUjian {id:$id, teks_jawaban:$teks, status:'menunggu_penilaian', dijawab_pada:$waktu})
                 CREATE (a)-[:HAS_JAWABAN]->(j)-[:UNTUK_SOAL]->(s)
                 """,

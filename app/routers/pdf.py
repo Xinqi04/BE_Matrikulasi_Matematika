@@ -1,5 +1,6 @@
 import re
 import uuid
+import pymupdf
 from pathlib import Path
 from typing import Optional
 
@@ -14,6 +15,37 @@ from app.services import kg_queries
 from app.services.pdf_pipeline import confirm_pdf_extraction, discard_pdf_draft, hapus_modul, run_pdf_extraction_preview
 
 router = APIRouter(prefix="/pdf", tags=["pdf"], dependencies=[Depends(require_role("dosen"))])
+
+
+async def _save_pdf(file: UploadFile, settings: Settings) -> Path:
+    limit = settings.max_pdf_upload_mb * 1024 * 1024
+    upload_dir = Path(settings.upload_dir)
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    dest_path = upload_dir / f"{uuid.uuid4().hex}.pdf"
+    try:
+        if file.size is not None and file.size > limit:
+            raise HTTPException(413, f"Ukuran PDF maksimal {settings.max_pdf_upload_mb} MB")
+        total = 0
+        with dest_path.open("xb") as output:
+            while chunk := await file.read(64 * 1024):
+                total += len(chunk)
+                if total > limit:
+                    raise HTTPException(413, f"Ukuran PDF maksimal {settings.max_pdf_upload_mb} MB")
+                output.write(chunk)
+        try:
+            # The file is bounded above. Parsing bytes avoids leaked native file
+            # handles on malformed PDFs preventing cleanup on Windows.
+            with pymupdf.open(stream=dest_path.read_bytes(), filetype="pdf") as document:
+                if not document.is_pdf or document.needs_pass or document.page_count == 0:
+                    raise ValueError("PDF kosong atau terenkripsi")
+        except Exception as exc:
+            raise HTTPException(400, "File harus berupa PDF valid, tidak kosong, dan tanpa password") from exc
+        return dest_path
+    except BaseException:
+        dest_path.unlink(missing_ok=True)
+        raise
+    finally:
+        await file.close()
 
 
 def _slugify_modul_id(nama_domain: str) -> Optional[str]:
@@ -66,12 +98,7 @@ async def extract_pdf(
             ),
         )
 
-    upload_dir = Path(settings.upload_dir)
-    upload_dir.mkdir(parents=True, exist_ok=True)
-    dest_path = upload_dir / f"{uuid.uuid4().hex}_{file.filename}"
-
-    content = await file.read()
-    dest_path.write_bytes(content)
+    dest_path = await _save_pdf(file, settings)
 
     job = create_job("pdf_extraction")
 

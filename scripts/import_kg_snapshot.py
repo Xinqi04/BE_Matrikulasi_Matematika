@@ -46,9 +46,12 @@ def main() -> None:
         driver.verify_connectivity()
         with driver.session(database=args.database) as session:
             for node in snapshot["nodes"]:
+                props = dict(node["properties"])
+                if node["label"] == "Materi" and props.get("tipe") == "youtube" and props.get("status_validasi") in (None, "draft"):
+                    props["status_validasi"] = "valid"
                 session.run(
                     f"MERGE (n:{node['label']} {{{node['key_name']}:$key}}) SET n += $props",
-                    key=node["key_value"], props=node["properties"],
+                    key=node["key_value"], props=props,
                 ).consume()
             for rel in snapshot["relationships"]:
                 start, end = rel["start"], rel["end"]

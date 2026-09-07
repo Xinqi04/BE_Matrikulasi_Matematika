@@ -1,5 +1,7 @@
 # Backend MathDasar
 
+Operasional satu VPS (bootstrap production, secret, backup/restore dan monitoring): lihat `../deploy/OPERATIONS.md`. Endpoint `/health` memeriksa proses; `/ready` memeriksa koneksi PostgreSQL dan Neo4j serta mengembalikan 503 saat salah satunya gagal.
+
 Backend aplikasi matrikulasi matematika berbasis FastAPI. Backend menggunakan PostgreSQL untuk
 akun, autentikasi, enrollment, dan data transaksional; Neo4j digunakan untuk struktur modul,
 Bab, konsep, materi, dan knowledge graph.
@@ -42,6 +44,7 @@ backend/
 ├── database/               # Skema dan init database
 ├── scripts/                # Seed dan utilitas migrasi
 ├── uploads/                # Upload lokal jika berjalan tanpa Docker
+├── kg_snapshot.json        # Snapshot awal struktur knowledge graph
 ├── .env.example            # Contoh konfigurasi aplikasi
 ├── .env.docker.example     # Contoh konfigurasi database Docker
 ├── Dockerfile
@@ -144,6 +147,42 @@ Alamat layanan:
 - Neo4j Browser: http://localhost:7474
 - PostgreSQL dari host: `localhost:5433`
 
+## Mengimpor knowledge graph saat setup pertama kali
+
+Setelah semua container berstatus sehat, masukkan data awal knowledge graph dari
+`kg_snapshot.json`. Pastikan file tersebut berada langsung di folder `backend`:
+
+```text
+backend/
+├── kg_snapshot.json
+├── docker-compose.yml
+└── scripts/
+```
+
+Jalankan perintah berikut dari folder `backend`:
+
+```powershell
+docker compose --env-file .env.docker cp .\kg_snapshot.json backend:/tmp/kg_snapshot.json
+docker compose --env-file .env.docker exec backend python scripts/import_kg_snapshot.py `
+  --uri bolt://neo4j:7687 `
+  --database neo4j `
+  --input /tmp/kg_snapshot.json
+```
+
+Jika berhasil, terminal menampilkan jumlah node dan relasi yang diimpor, misalnya:
+
+```text
+Node: 120, relasi: 245 berhasil diimpor.
+```
+
+Impor ini cukup dilakukan sekali setelah volume Neo4j pertama kali dibuat. Script menggunakan
+`MERGE`, sehingga aman dijalankan ulang jika proses sebelumnya terputus atau hasil impor perlu
+dipastikan kembali.
+
+Snapshot hanya berisi struktur knowledge graph seperti modul, bab, subbab, konsep, dan materi.
+Snapshot tidak berisi akun, password, enrollment, jawaban, atau nilai. Buat akun dummy secara
+terpisah menggunakan langkah pada bagian berikutnya.
+
 ## Membuat akun dummy
 
 Setelah semua container sehat:
@@ -213,6 +252,15 @@ Untuk workflow project ini, cara Docker lebih disarankan.
 
 ## Troubleshooting
 
+### Batas upload dan akses production
+
+- Endpoint `/jobs` hanya dapat diakses akun dosen yang aktif. Seluruh dosen berbagi daftar job, sesuai manajemen materi bersama saat ini.
+- `MAX_PDF_UPLOAD_MB=20` membatasi setiap PDF hingga 20 MiB (dapat diatur 1–200). Body multipart dibatasi sebelum parsing hingga batas file + 1 MiB untuk field/header, termasuk request tanpa Content-Length.
+- PDF harus valid, memiliki halaman, dan tidak dilindungi password. File gagal validasi dibersihkan; nama file penyimpanan dibuat server.
+- Saat memasang reverse proxy, sesuaikan batas body dengan batas multipart (misalnya Nginx `client_max_body_size 21m` untuk default).
+- Submit pretest/posttest wajib berisi tepat seluruh soal sesi, jawaban tidak kosong, dan ID soal tidak duplikat. Pengiriman ulang ditolak. Posttest mengambil soal pretest dari modul yang sama.
+- Jalankan pemeriksaan regresi dengan `python -m unittest discover -s tests -v` dari folder backend (memerlukan dependency runtime dan `httpx`). Pengujian unit memakai database tiruan; uji konkurensi Neo4j perlu lingkungan integrasi terpisah.
+
 ### Port 5433 sudah digunakan
 
 Cari container yang memakai port tersebut:
@@ -249,3 +297,16 @@ docker compose --env-file .env.docker up -d --build
 ```
 
 Gunakan hanya jika benar-benar ingin memulai database kosong.
+
+
+## Persistensi job dan konfirmasi draft
+
+Riwayat job/log/result (termasuk hasil generate soal) berada di tabel `background_jobs`; draft PDF/YouTube berada di `job_drafts`. Tabel dibuat secara idempotent saat startup, tanpa perlu menghapus volume database. Daftar job menampilkan 200 job terbaru; detail ID lama tetap dapat diakses. Backup PostgreSQL dan Neo4j secara konsisten karena Neo4j menyimpan receipt `DraftConfirmation`.
+
+Konfirmasi PDF/YouTube mengunci baris draft, menulis seluruh perubahan graph bersama receipt dalam satu transaksi Neo4j, kemudian menyimpan status dan response di PostgreSQL. Retry sesudah sukses mengembalikan response pertama (perubahan payload setelah berhasil diabaikan); error tidak membuang draft. Jika graph sudah commit tetapi PostgreSQL gagal, retry mengambil receipt, bukan menulis ulang graph. Discard tidak dapat membatalkan graph yang telah commit. UI menampilkan status tersimpan/dibuang setelah reload.
+
+Executor masih FastAPI BackgroundTasks dan **hanya satu proses backend**. Startup memegang advisory lock PostgreSQL dan menandai job pending/running lama sebagai error agar tidak menggantung. Tidak ada kelanjutan otomatis proses AI; jalankan ulang job terputus. Draft dan preview disimpan atomik sebelum status selesai terlihat. Jangan menghapus receipt konfirmasi secara manual.
+
+Sebelum pembaruan pertama ini, selesaikan pekerjaan dan konfirmasi draft versi lama: isi RAM lama tidak otomatis dipindahkan. Setelah itu rebuild backend/frontend. Hak CREATE tabel PostgreSQL dan constraint Neo4j diperlukan saat startup. Konfirmasi generate soal masih endpoint terpisah berbasis payload; perlindungan receipt pada perubahan ini berlaku untuk draft PDF/YouTube.
+
+Pengujian unit: `python -m unittest discover -s tests -v`. Pengujian PostgreSQL asli: set `RUN_PG_INTEGRATION=1` lalu jalankan perintah yang sama. Test membuat schema acak khusus test dan menghapus hanya schema tersebut setelah selesai; akun perlu izin CREATE schema.
